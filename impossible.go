@@ -490,6 +490,7 @@ func (r *SimRadio) read(c *simClient, msg map[string]interface{}) {
 			"characteristicId": charID, "value": "", "error": "not connected"})
 		return
 	}
+	log.Printf("%s read %s", l.addr, ch.char)
 	l.handler.Read(ch.char)
 }
 
@@ -544,6 +545,7 @@ func (r *SimRadio) setNotify(c *simClient, msg map[string]interface{}) {
 	}
 	l.mu.Unlock()
 	c.send(reply)
+	log.Printf("%s %s notifications %v", l.addr, ch.char, map[bool]string{true: "on", false: "off"}[enabled])
 	l.handler.Subscribed(ch.char, enabled)
 }
 

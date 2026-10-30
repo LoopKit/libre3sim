@@ -68,7 +68,10 @@ type State struct {
 	PairingOpen     bool         `json:"pairingOpen"`       // a full handshake is allowed: NFC ran since the last one
 	AuthKey         string       `json:"authKey,omitempty"` // kAuth of the last full handshake, for cached reconnects
 	Terminated      *Termination `json:"terminated,omitempty"`
-	Glucose         GlucoseMode  `json:"glucose"`
+	// LastEvent is the sensor's most recent event-log entry, which patch
+	// status carries in its first bytes while the sensor keeps working.
+	LastEvent *Termination `json:"lastEvent,omitempty"`
+	Glucose   GlucoseMode  `json:"glucose"`
 	// Readings holds the glucose of every minute of wear, by life count; 0
 	// where the sensor had none (warmup).
 	Readings []uint16 `json:"readings"`

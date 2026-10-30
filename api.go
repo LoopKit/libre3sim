@@ -21,6 +21,9 @@ import (
 //	                             drop the link and stay unreachable that long
 //	POST /terminate   {"errorData":6}
 //	                             end the sensor early (6 terminated, 8 replace sensor)
+//	POST /event       {"errorData":8}
+//	                             log an event-log entry while the sensor keeps working;
+//	                             patch status repeats it with patch state 4 ({"errorData":0} clears)
 //	POST /new         {"serial":"","wearDays":14,"warmupMinutes":60,"ageMinutes":0}
 //	                             replace the sensor with a new one and restart;
 //	                             ageMinutes 0 is a sensor still in its applicator
@@ -85,6 +88,18 @@ func serveAPI(addr string, sensor *libre3.Sensor, radio *SimRadio, replace func(
 		}
 		sensor.Terminate(req.ErrorData, time.Now())
 		log.Printf("terminated with errorData %d", req.ErrorData)
+		writeJSON(w, sensor.Status())
+	})
+	post("/event", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ErrorData uint16 `json:"errorData"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `want {"errorData":n}`, http.StatusBadRequest)
+			return
+		}
+		sensor.LogEvent(req.ErrorData, time.Now())
+		log.Printf("event-log entry with errorData %d", req.ErrorData)
 		writeJSON(w, sensor.Status())
 	})
 	post("/new", func(w http.ResponseWriter, r *http.Request) {

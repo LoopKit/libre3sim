@@ -141,6 +141,15 @@ func (s *Sensor) Terminate(errorData uint16, now time.Time) {
 	s.save()
 }
 
+// LogEvent records an event-log entry with errorData while the sensor keeps
+// working: patch status reports it with patch state 4 until the next event.
+func (s *Sensor) LogEvent(errorData uint16, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.LastEvent = &Termination{LifeCount: uint16(s.state.lifeCount(now)), ErrorData: errorData, PatchState: patchActive}
+	s.save()
+}
+
 func (s *Sensor) SetGlucoseMode(m GlucoseMode) {
 	s.mu.Lock()
 	s.state.Glucose = m
@@ -332,6 +341,8 @@ func (s *Sensor) patchStatus(now time.Time) PatchStatusRecord {
 		p.LifeCount, p.ErrorData, p.PatchState = st.Terminated.LifeCount, st.Terminated.ErrorData, st.Terminated.PatchState
 	case int(lc) >= st.WearMinutes:
 		p.LifeCount, p.ErrorData, p.PatchState = uint16(st.WearMinutes), errorExpired, patchExpired
+	case st.LastEvent != nil:
+		p.LifeCount, p.ErrorData = st.LastEvent.LifeCount, st.LastEvent.ErrorData
 	}
 	return p
 }
@@ -465,6 +476,9 @@ func (s *Sensor) Status() map[string]interface{} {
 	}
 	if st.Terminated != nil {
 		out["terminated"] = st.Terminated
+	}
+	if st.LastEvent != nil {
+		out["lastEvent"] = st.LastEvent
 	}
 	if now.Before(s.outUntil) {
 		out["outOfRangeUntil"] = s.outUntil.Format(time.RFC3339)
