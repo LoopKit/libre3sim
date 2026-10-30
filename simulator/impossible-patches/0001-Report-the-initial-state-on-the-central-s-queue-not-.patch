@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pschwamb@gmail.com>
+Date: Sun, 11 Oct 2026 11:06:56 -0500
+Subject: [PATCH 1/5] Report the initial state on the central's queue, not the
+ main queue
+
+-initWithDelegate:queue:options: sets the delegate itself, so the swizzled
+setDelegate: runs before cbs_post_init has recorded the central's queue. It
+then fell back to the main queue and delivered centralManagerDidUpdateState:
+there, before cbs_post_init delivered it again on the right queue. An app
+that asserts its queue in that callback (dispatchPrecondition) trapped at
+launch. setDelegate: now leaves the first report to cbs_post_init.
+---
+ Sources/ImpossiBLE/CBSActivator.m             |  4 +-
+ .../CentralLifecycleTests.swift               | 39 +++++++++++++++++++
+ 2 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/Sources/ImpossiBLE/CBSActivator.m b/Sources/ImpossiBLE/CBSActivator.m
+index f44eb06..1304f0e 100644
+--- a/Sources/ImpossiBLE/CBSActivator.m
++++ b/Sources/ImpossiBLE/CBSActivator.m
+@@ -1691,7 +1691,9 @@ static void cbs_setDelegate(id self, SEL _cmd, id delegate) {
+     cbs_register_central((CBCentralManager *)self);
+     dispatch_queue_t q = objc_getAssociatedObject(self, kCBSDelegateQueueKey);
+     if (!q) {
+-        q = dispatch_get_main_queue();
++        // Called from inside -initWithDelegate:queue:options:, before the
++        // central's queue is known; cbs_post_init reports the state on it.
++        return;
+     }
+     if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
+         dispatch_async(q, ^{
+diff --git a/Tests/ImpossiBLETests/CentralLifecycleTests.swift b/Tests/ImpossiBLETests/CentralLifecycleTests.swift
+index 7dad45a..99aa0e6 100644
+--- a/Tests/ImpossiBLETests/CentralLifecycleTests.swift
++++ b/Tests/ImpossiBLETests/CentralLifecycleTests.swift
+@@ -44,9 +44,48 @@ final class CentralLifecycleTests: XCTestCase {
+         _ = survivorDelegate
+         _ = ephemeralDelegate
+     }
++
++    func testStateUpdatesArriveOnTheCentralsQueue() {
++        let key = DispatchSpecificKey<Bool>()
++        let queue = DispatchQueue(label: "impossible.tests.central.queue")
++        queue.setSpecific(key: key, value: true)
++        let delegate = QueueRecordingDelegate(key: key)
++
++        let central = CBCentralManager(delegate: delegate, queue: queue, options: nil)
++        queue.sync {}
++        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
++        queue.sync {}
++
++        XCTAssertFalse(delegate.onQueue.isEmpty)
++        XCTAssertEqual(delegate.onQueue.filter { !$0 }.count, 0, "a state update arrived off the central's queue")
++        _ = central
++    }
+ }
+ 
+ private final class CentralDelegate: NSObject, CBCentralManagerDelegate {
+     func centralManagerDidUpdateState(_ central: CBCentralManager) {}
+ }
++
++private final class QueueRecordingDelegate: NSObject, CBCentralManagerDelegate {
++    let key: DispatchSpecificKey<Bool>
++    private let lock = NSLock()
++    private var calls: [Bool] = []
++
++    init(key: DispatchSpecificKey<Bool>) {
++        self.key = key
++    }
++
++    var onQueue: [Bool] {
++        lock.lock()
++        defer { lock.unlock() }
++        return calls
++    }
++
++    func centralManagerDidUpdateState(_ central: CBCentralManager) {
++        let isOnQueue = DispatchQueue.getSpecific(key: key) == true
++        lock.lock()
++        calls.append(isOnQueue)
++        lock.unlock()
++    }
++}
+ #endif

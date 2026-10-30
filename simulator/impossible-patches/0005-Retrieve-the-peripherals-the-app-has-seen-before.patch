@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pete@schwamb.net>
+Date: Mon, 12 Oct 2026 01:44:06 -0500
+Subject: [PATCH 5/5] Retrieve the peripherals the app has seen before
+
+iOS remembers the peripherals it has discovered, and
+retrievePeripheralsWithIdentifiers: returns them to the app after a
+relaunch, so it can connect without scanning: that is how an app
+reconnects to a peripheral that does not advertise what it scans for.
+ImpossiBLE returned only peripherals seen since the app launched, so after
+a relaunch such an app never reconnected. Remember discovered
+peripherals in the app's defaults and return them.
+---
+ Sources/ImpossiBLE/CBSActivator.m | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/Sources/ImpossiBLE/CBSActivator.m b/Sources/ImpossiBLE/CBSActivator.m
+index 3afd501..219855a 100644
+--- a/Sources/ImpossiBLE/CBSActivator.m
++++ b/Sources/ImpossiBLE/CBSActivator.m
+@@ -221,6 +221,27 @@ static void cbs_register_central(CBCentralManager *central) {
+     return matches;
+ }
+ 
++// iOS remembers the peripherals it has seen across launches, and
++// retrievePeripheralsWithIdentifiers: returns them to a relaunched app.
++static NSString *const kCBSKnownPeripheralsKey = @"ImpossiBLE.knownPeripherals";
++
++static void cbs_remember_peripheral(NSUUID *uuid, NSString *name) {
++    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
++    NSDictionary *known = [defaults dictionaryForKey:kCBSKnownPeripheralsKey] ?: @{};
++    NSString *value = name ?: @"";
++    if ([known[uuid.UUIDString] isEqual:value] || (value.length == 0 && known[uuid.UUIDString])) {
++        return;
++    }
++    NSMutableDictionary *updated = [known mutableCopy];
++    updated[uuid.UUIDString] = value;
++    [defaults setObject:updated forKey:kCBSKnownPeripheralsKey];
++}
++
++static NSString *cbs_known_peripheral_name(NSUUID *uuid) {
++    id name = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kCBSKnownPeripheralsKey][uuid.UUIDString];
++    return [name isKindOfClass:[NSString class]] ? name : nil;
++}
++
+ static CBSPeripheral *cbs_any_peripheral_for_uuid(NSUUID *uuid) {
+     NSArray<CBSPeripheral *> *matches = cbs_all_peripherals_for_uuid(uuid);
+     return matches.count > 0 ? matches.firstObject : nil;
+@@ -811,6 +832,7 @@ static void cbs_handle_message(NSDictionary *msg) {
+         if (!uuid) {
+             return;
+         }
++        cbs_remember_peripheral(uuid, name);
+         if (!gAdvertisedServices) {
+             gAdvertisedServices = [NSMutableDictionary dictionary];
+         }
+@@ -1882,11 +1904,15 @@ static void cbs_register_for_connection_events(id self, SEL _cmd, NSDictionary *
+             CBSPeripheral *peripheral = store[uuid];
+             if (!peripheral) {
+                 CBSPeripheral *source = cbs_any_peripheral_for_uuid(uuid);
++                NSString *knownName = cbs_known_peripheral_name(uuid);
+                 if (source) {
+                     peripheral = [[CBSPeripheral alloc] initWithIdentifier:uuid name:source.name ?: @""];
+                     [peripheral cbs_setState:source.state];
+                     peripheral.services = source.services ?: @[];
+                     store[uuid] = peripheral;
++                } else if (knownName) {
++                    peripheral = [[CBSPeripheral alloc] initWithIdentifier:uuid name:knownName];
++                    store[uuid] = peripheral;
+                 }
+             }
+             if (peripheral) {

@@ -1,0 +1,5 @@
+libre3sim
+*.json
+*.json.tmp
+simulator/build/
+run/

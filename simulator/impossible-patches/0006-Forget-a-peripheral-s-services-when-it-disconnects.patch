@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pete@schwamb.net>
+Date: Mon, 12 Oct 2026 10:32:11 -0500
+Subject: [PATCH] Forget a peripheral's services when it disconnects
+
+In CoreBluetooth, services is nil until the app discovers them and nil
+again after a disconnect, and apps rediscover on reconnecting when they
+find it nil. OmnipodKit does: it sets up a new session with the pod only
+when it reconfigures the peripheral. ImpossiBLE kept the old services, so
+after reconnecting to a pod OmnipodKit sent commands without a session
+and the pod never answered.
+---
+ Sources/ImpossiBLE/CBSProxies.m | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/Sources/ImpossiBLE/CBSProxies.m b/Sources/ImpossiBLE/CBSProxies.m
+index 12af404..659f500 100644
+--- a/Sources/ImpossiBLE/CBSProxies.m
++++ b/Sources/ImpossiBLE/CBSProxies.m
+@@ -37,7 +37,7 @@ - (instancetype)initWithIdentifier:(NSUUID *)identifier name:(NSString *)name {
+         _shimName = [name copy];
+         _shimDelegate = nil;
+         _shimState = CBPeripheralStateDisconnected;
+-        _shimServices = @[];
++        _shimServices = nil;
+     }
+     return self;
+ }
+@@ -48,7 +48,7 @@ - (NSString *)name { return _shimName; }
+ - (void)setDelegate:(id<CBPeripheralDelegate>)delegate { _shimDelegate = delegate; }
+ - (CBPeripheralState)state { return _shimState; }
+ - (NSArray *)services { return _shimServices; }
+-- (void)setServices:(NSArray *)services { _shimServices = [services copy] ?: @[]; }
++- (void)setServices:(NSArray *)services { _shimServices = [services copy]; }
+ 
+ - (void)cbs_updateName:(NSString *)name {
+     _shimName = [name copy];
+@@ -56,8 +56,9 @@ - (void)cbs_updateName:(NSString *)name {
+ 
+ - (void)cbs_setState:(CBPeripheralState)state {
+     _shimState = state;
+-    // As in CoreBluetooth, a disconnect ends every subscription; the app
+-    // subscribes again on its next connection.
++    // As in CoreBluetooth, a disconnect ends every subscription and forgets
++    // the services: services is nil until the app discovers them again on its
++    // next connection.
+     if (state == CBPeripheralStateDisconnected) {
+         for (id service in _shimServices) {
+             if (![service isKindOfClass:[CBSService class]]) {
+@@ -69,6 +70,7 @@ - (void)cbs_setState:(CBPeripheralState)state {
+                 }
+             }
+         }
++        _shimServices = nil;
+     }
+ }
+ 

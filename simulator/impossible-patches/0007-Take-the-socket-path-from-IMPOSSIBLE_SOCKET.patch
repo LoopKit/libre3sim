@@ -1,0 +1,45 @@
+From fca9bf1ccdc0037a198a9c8b32e5fff559f10a7d Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pete@schwamb.net>
+Date: Fri, 30 Oct 2026 17:38:17 -0500
+Subject: [PATCH] Take the socket path from IMPOSSIBLE_SOCKET
+
+---
+ Sources/ImpossiBLE/CBSConnection.m | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/Sources/ImpossiBLE/CBSConnection.m b/Sources/ImpossiBLE/CBSConnection.m
+index 914de87..7895b07 100644
+--- a/Sources/ImpossiBLE/CBSConnection.m
++++ b/Sources/ImpossiBLE/CBSConnection.m
+@@ -5,7 +5,12 @@
+ 
+ #if TARGET_OS_SIMULATOR
+ 
+-static const char *kCBSSocketPath = "/tmp/impossible.sock";
++// IMPOSSIBLE_SOCKET picks another provider's socket, so apps in several
++// simulators can each have their own.
++static const char *CBSSocketPath(void) {
++    const char *path = getenv("IMPOSSIBLE_SOCKET");
++    return path && *path ? path : "/tmp/impossible.sock";
++}
+ // Reported to the provider in the hello handshake so version skew between the
+ // linked library and the installed provider is diagnosable instead of silent.
+ // Keep in sync with the release version (see the release checklist in AGENTS.md).
+@@ -133,7 +138,7 @@ static int cbs_try_connect(void) {
+     struct sockaddr_un addr;
+     memset(&addr, 0, sizeof(addr));
+     addr.sun_family = AF_UNIX;
+-    strncpy(addr.sun_path, kCBSSocketPath, sizeof(addr.sun_path) - 1);
++    strncpy(addr.sun_path, CBSSocketPath(), sizeof(addr.sun_path) - 1);
+ 
+     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+     if (fd < 0) {
+@@ -166,7 +171,7 @@ static int cbs_connect(void) {
+             usleep(200000);
+         }
+     }
+-    NSLog(@"ImpossiBLE: connect(%s) failed after retries", kCBSSocketPath);
++    NSLog(@"ImpossiBLE: connect(%s) failed after retries", CBSSocketPath());
+     cbs_schedule_reconnect();
+     return -1;
+ }

@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pschwamb@gmail.com>
+Date: Sun, 11 Oct 2026 20:39:44 -0500
+Subject: [PATCH 2/5] Record each central once, before the socket opens
+
+cbs_post_init ran twice for a central made with -initWithDelegate:queue:
+or -init, since those call -initWithDelegate:queue:options: and all three
+are swizzled; the second run queued a second initial state report.
+
+It also opened the socket before recording the central's queue. The
+provider can answer hello at once, and the connection coming up notifies
+every registered central, and the central, already registered by the
+setDelegate: inside init, had no queue yet, so that report went to the
+main queue. A provider message such as didRestoreState sent right after
+hello could arrive before gCentral was set.
+
+Record the central first, then open the socket, and send the initial
+report once the open in flight has connected or failed, so it carries
+the state it resolved to; connection changes skip a central whose
+initial report is still queued.
+---
+ Sources/ImpossiBLE/CBSActivator.m             | 34 ++++++++++++++----
+ Sources/ImpossiBLE/CBSConnection.h            |  3 ++
+ Sources/ImpossiBLE/CBSConnection.m            |  7 ++++
+ .../CentralLifecycleTests.swift               | 35 +++++++++++++++++++
+ 4 files changed, 73 insertions(+), 6 deletions(-)
+
+diff --git a/Sources/ImpossiBLE/CBSActivator.m b/Sources/ImpossiBLE/CBSActivator.m
+index 1304f0e..7efb41b 100644
+--- a/Sources/ImpossiBLE/CBSActivator.m
++++ b/Sources/ImpossiBLE/CBSActivator.m
+@@ -18,6 +18,7 @@
+ static void *kCBSScanServiceFilterKey = &kCBSScanServiceFilterKey;
+ static void *kCBSScanWireOptionsKey = &kCBSScanWireOptionsKey;
+ static void *kCBSCentralKeyKey = &kCBSCentralKeyKey;
++static void *kCBSInitialStateReportedKey = &kCBSInitialStateReportedKey;
+ static CBCentralManager *cbs_owner_central_for_peripheral(NSUUID *identifier);
+ static NSArray<CBSPeripheral *> *cbs_all_peripherals_for_uuid(NSUUID *uuid);
+ static uint64_t gNextCentralId = 1;
+@@ -41,6 +42,10 @@
+ static void cbs_notify_all_centrals_state_changed(void) {
+     NSArray *centrals = gCentrals.allObjects;
+     for (CBCentralManager *central in centrals) {
++        if (!objc_getAssociatedObject(central, kCBSInitialStateReportedKey)) {
++            // Its initial report, still queued, carries the new state.
++            continue;
++        }
+         id delegate = central.delegate;
+         if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
+             dispatch_queue_t q = objc_getAssociatedObject(central, kCBSDelegateQueueKey);
+@@ -1628,7 +1633,12 @@ static void cbs_ensure_connection_open(void) {
+ }
+ 
+ static void cbs_post_init(id obj, id delegate, dispatch_queue_t queue) {
+-    cbs_ensure_connection_open();
++    // The shorter initializers call the longer one, and both are swizzled.
++    if (objc_getAssociatedObject(obj, kCBSDelegateQueueKey)) {
++        return;
++    }
++    // Record the central before the socket opens: the provider may answer
++    // hello at once, and the connection coming up notifies registered centrals.
+     dispatch_queue_t q = queue ?: dispatch_get_main_queue();
+     objc_setAssociatedObject(obj, kCBSDelegateQueueKey, q, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+     objc_setAssociatedObject(obj, kCBSIsScanningKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+@@ -1636,11 +1646,23 @@ static void cbs_post_init(id obj, id delegate, dispatch_queue_t queue) {
+     objc_setAssociatedObject(obj, kCBSScanWireOptionsKey, @{}, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+     gCentral = obj;
+     cbs_register_central((CBCentralManager *)obj);
+-    if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
+-        dispatch_async(q, ^{
+-            [delegate centralManagerDidUpdateState:obj];
+-        });
+-    }
++    cbs_ensure_connection_open();
++
++    // Like CoreBluetooth, report the initial state once, when it is known:
++    // after the open in flight has connected or failed.
++    __weak CBCentralManager *weakCentral = obj;
++    CBSConnectionAfterPendingOpen(^{
++        CBCentralManager *central = weakCentral;
++        if (!central) {
++            return;
++        }
++        objc_setAssociatedObject(central, kCBSInitialStateReportedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++        if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
++            dispatch_async(q, ^{
++                [delegate centralManagerDidUpdateState:central];
++            });
++        }
++    });
+ }
+ 
+ static id (*orig_init)(id, SEL, id, dispatch_queue_t, NSDictionary *);
+diff --git a/Sources/ImpossiBLE/CBSConnection.h b/Sources/ImpossiBLE/CBSConnection.h
+index fb7b288..dc4935c 100644
+--- a/Sources/ImpossiBLE/CBSConnection.h
++++ b/Sources/ImpossiBLE/CBSConnection.h
+@@ -7,4 +7,7 @@ void CBSConnectionSetMessageHandler(CBSMessageHandler handler);
+ void CBSConnectionSetStateHandler(CBSStateHandler handler);
+ void CBSConnectionSend(NSDictionary *msg);
+ void CBSConnectionOpen(void);
++/// Runs the block on the connection's queue, after any open already requested has
++/// connected or failed. Connection state changes are reported on the same queue.
++void CBSConnectionAfterPendingOpen(dispatch_block_t block);
+ BOOL CBSConnectionIsConnected(void);
+diff --git a/Sources/ImpossiBLE/CBSConnection.m b/Sources/ImpossiBLE/CBSConnection.m
+index d3fa0fa..914de87 100644
+--- a/Sources/ImpossiBLE/CBSConnection.m
++++ b/Sources/ImpossiBLE/CBSConnection.m
+@@ -252,6 +252,13 @@ void CBSConnectionOpen(void) {
+     });
+ }
+ 
++void CBSConnectionAfterPendingOpen(dispatch_block_t block) {
++    if (!gWriteQueue) {
++        gWriteQueue = dispatch_queue_create("impossible.writer", DISPATCH_QUEUE_SERIAL);
++    }
++    dispatch_async(gWriteQueue, block);
++}
++
+ void CBSConnectionSend(NSDictionary *msg) {
+     if (!gWriteQueue) {
+         gWriteQueue = dispatch_queue_create("impossible.writer", DISPATCH_QUEUE_SERIAL);
+diff --git a/Tests/ImpossiBLETests/CentralLifecycleTests.swift b/Tests/ImpossiBLETests/CentralLifecycleTests.swift
+index 99aa0e6..a6fe9a9 100644
+--- a/Tests/ImpossiBLETests/CentralLifecycleTests.swift
++++ b/Tests/ImpossiBLETests/CentralLifecycleTests.swift
+@@ -60,6 +60,24 @@ final class CentralLifecycleTests: XCTestCase {
+         XCTAssertEqual(delegate.onQueue.filter { !$0 }.count, 0, "a state update arrived off the central's queue")
+         _ = central
+     }
++
++    func testEveryInitializerReportsTheInitialStateTheSameNumberOfTimes() {
++        let withOptions = CountingDelegate()
++        let withOptionsQueue = DispatchQueue(label: "impossible.tests.central.options")
++        let a = CBCentralManager(delegate: withOptions, queue: withOptionsQueue, options: nil)
++
++        let withoutOptions = CountingDelegate()
++        let withoutOptionsQueue = DispatchQueue(label: "impossible.tests.central.nooptions")
++        let b = CBCentralManager(delegate: withoutOptions, queue: withoutOptionsQueue)
++
++        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
++        withOptionsQueue.sync {}
++        withoutOptionsQueue.sync {}
++
++        XCTAssertGreaterThan(withOptions.count, 0)
++        XCTAssertEqual(withoutOptions.count, withOptions.count)
++        _ = (a, b)
++    }
+ }
+ 
+ private final class CentralDelegate: NSObject, CBCentralManagerDelegate {
+@@ -88,4 +106,21 @@ private final class QueueRecordingDelegate: NSObject, CBCentralManagerDelegate {
+         lock.unlock()
+     }
+ }
++
++private final class CountingDelegate: NSObject, CBCentralManagerDelegate {
++    private let lock = NSLock()
++    private var updates = 0
++
++    var count: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return updates
++    }
++
++    func centralManagerDidUpdateState(_ central: CBCentralManager) {
++        lock.lock()
++        updates += 1
++        lock.unlock()
++    }
++}
+ #endif

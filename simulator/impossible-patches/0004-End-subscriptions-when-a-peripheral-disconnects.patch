@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Pete Schwamb <pete@schwamb.net>
+Date: Mon, 12 Oct 2026 01:36:40 -0500
+Subject: [PATCH 4/5] End subscriptions when a peripheral disconnects
+
+In CoreBluetooth a disconnect ends every subscription: isNotifying is
+false afterwards and the app subscribes again on its next connection.
+ImpossiBLE kept isNotifying true, so an app that subscribes only to
+characteristics that are not yet notifying (OmnipodKit does) never
+subscribed again after a reconnect, and the peripheral's notifications
+went nowhere.
+---
+ Sources/ImpossiBLE/CBSProxies.m | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/Sources/ImpossiBLE/CBSProxies.m b/Sources/ImpossiBLE/CBSProxies.m
+index 6bc0576..12af404 100644
+--- a/Sources/ImpossiBLE/CBSProxies.m
++++ b/Sources/ImpossiBLE/CBSProxies.m
+@@ -56,6 +56,20 @@ - (void)cbs_updateName:(NSString *)name {
+ 
+ - (void)cbs_setState:(CBPeripheralState)state {
+     _shimState = state;
++    // As in CoreBluetooth, a disconnect ends every subscription; the app
++    // subscribes again on its next connection.
++    if (state == CBPeripheralStateDisconnected) {
++        for (id service in _shimServices) {
++            if (![service isKindOfClass:[CBSService class]]) {
++                continue;
++            }
++            for (id characteristic in [(CBSService *)service characteristics]) {
++                if ([characteristic isKindOfClass:[CBSCharacteristic class]]) {
++                    [(CBSCharacteristic *)characteristic cbs_setNotifying:NO];
++                }
++            }
++        }
++    }
+ }
+ 
+ - (void)readRSSI {
