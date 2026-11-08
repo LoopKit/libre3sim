@@ -278,8 +278,21 @@ func TestFreshSensorActivates(t *testing.T) {
 		t.Fatal("activation did not take")
 	}
 	info, _ = s.NFC(0xa1, nil, time.Now())
-	if info[17] != nfcWarmup {
+	if info[17] != nfcActive {
 		t.Fatalf("state after activation %02x", info[17])
+	}
+}
+
+func TestTerminatedSensorRejectsSwitchReceiver(t *testing.T) {
+	s := testSensor(t, time.Hour)
+	s.Terminate(errorTerminated, time.Now())
+	info, _ := s.NFC(0xa1, nil, time.Now())
+	if info[17] != nfcTerminated {
+		t.Fatalf("state %02x", info[17])
+	}
+	_, err := s.NFC(0xa8, nfcParams(s.state.ReceiverID), time.Now())
+	if e, ok := err.(*NFCError); !ok || e.Code != 0xb0 {
+		t.Fatalf("switch receiver on a terminated sensor: %v", err)
 	}
 }
 

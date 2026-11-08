@@ -133,6 +133,10 @@ func serveAPI(addr string, sensor *libre3.Sensor, radio *SimRadio, replace func(
 			return
 		}
 		resp, err := sensor.NFC(req.Code, params, time.Now())
+		if e, ok := err.(*libre3.NFCError); ok && e.Code >= 0xb0 {
+			log.Printf("NFC %02x: %v", req.Code, err)
+			resp, err = []byte{0xa5, 0x01, e.Code}, nil
+		}
 		if err != nil {
 			log.Printf("NFC %02x: %v", req.Code, err)
 			code := 0

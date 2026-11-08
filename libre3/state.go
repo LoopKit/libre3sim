@@ -22,14 +22,15 @@ const (
 	errorTerminated = 6
 )
 
-// NFC state bytes. Only 0x01 (not yet activated) is grounded; RoundWhiteDiscKit
-// sends switch-receiver for anything else. The rest follow the Libre 2.
+// NFC state bytes, the same numbers as the BLE patch state. RoundWhiteDiscKit's
+// captures show 0x01 for a sensor in its applicator and 0x04 for a running one,
+// and a real Libre 3 Plus scanned after its wear read 0x06. A sensor in warmup
+// reads 0x04 here, as its BLE patch state does.
 const (
 	nfcNotActivated = 0x01
-	nfcWarmup       = 0x02
-	nfcActive       = 0x03
-	nfcExpired      = 0x04
-	nfcTerminated   = 0x05
+	nfcActive       = 0x04
+	nfcExpired      = 0x05
+	nfcTerminated   = 0x06
 )
 
 // GlucoseMode is how readings are made up: "sine" around Value, "fixed" at

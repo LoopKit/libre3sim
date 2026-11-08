@@ -157,7 +157,8 @@ func (s *Sensor) SetGlucoseMode(m GlucoseMode) {
 	s.mu.Unlock()
 }
 
-// NFCError is a sensor's error reply to an NFC command.
+// NFCError is a sensor's error reply to an NFC command. Codes 0xb0 and up are the
+// sensor's own rejections, which it sends as the response a5 01 <code>.
 type NFCError struct {
 	Code    byte
 	Message string
@@ -187,6 +188,8 @@ func (s *Sensor) NFC(code byte, params []byte, now time.Time) ([]byte, error) {
 			return nil, &NFCError{0xb0, "already activated; switch receiver instead"}
 		case code == 0xa8 && !activated:
 			return nil, &NFCError{0xb0, "not activated yet"}
+		case code == 0xa8 && s.state.Terminated != nil:
+			return nil, &NFCError{0xb0, "terminated"}
 		case code == 0xa8 && s.state.ReceiverID != 0 && receiver != s.state.ReceiverID:
 			return nil, &NFCError{0xb1, fmt.Sprintf("receiver %08x is not the one this sensor was activated with", receiver)}
 		}
@@ -223,8 +226,6 @@ func (s *Sensor) nfcState(now time.Time) byte {
 		return nfcTerminated
 	case lc >= st.WearMinutes:
 		return nfcExpired
-	case lc < st.WarmupMinutes:
-		return nfcWarmup
 	default:
 		return nfcActive
 	}

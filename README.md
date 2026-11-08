@@ -15,7 +15,7 @@ without a real sensor. It serves an app in the iOS Simulator through
 
 | Part | State |
 |---|---|
-| NFC patch info (`a1`), activation (`a0`), switch receiver (`a8`, with the `b1` receiver check) | done, unit tested |
+| NFC patch info (`a1`), activation (`a0`), switch receiver (`a8`, with the `b1` receiver check; a terminated sensor answers `a5 01 b0`, as a real one did) | done, unit tested |
 | Command-gated handshake: certificates, ephemeral keys, kAuth, Phase 5/6 | done, unit tested |
 | Cached reconnect from `StartAuthorization` with the saved kAuth | done, unit tested |
 | BLE PIN burned by each NFC scan; a full handshake needs a scan first | done, unit tested |
@@ -28,8 +28,8 @@ without a real sensor. It serves an app in the iOS Simulator through
 
 The sensor model follows the client side in RoundWhiteDiscKit (`PairingFlow`,
 `SensorSession`, the `DataPlane` decoders) and LibreLoop's sensor monitor. Where those do
-not pin a behaviour down, libre3sim picks one and says so in the code: the NFC state bytes
-other than `01`, the patch state during warmup (`4`), the data-plane descriptors for the
+not pin a behaviour down, libre3sim picks one and says so in the code: the NFC state byte
+during warmup (`04`, as when running), the patch state during warmup (`4`), the data-plane descriptors for the
 clinical, event-log and factory channels, and what a sensor does with a Phase 5 it cannot
 verify (it drops the link).
 
